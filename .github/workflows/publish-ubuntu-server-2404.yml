@@ -14,7 +14,7 @@
 # The consumer-side contract (manifest schema v1 + URL layout) is
 # defined in the xTools monorepo at xImages/server/internal/pull/official.go.
 # ximagesd's baked trust bundle allowlists this workflow's identity:
-#   ^https://github\.com/xToolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$
+#   ^https://github\.com/xtoolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$
 #
 # Later Track A stages replace the upstream-image passthrough with real
 # Packer builds (migrated from the monorepo PoC sources) and add SLSA
@@ -109,7 +109,7 @@ jobs:
             "predicateType": "https://slsa.dev/provenance/v1",
             "predicate": {
               "buildDefinition": {
-                "buildType": "https://github.com/xToolsio/ximages-builds/upstream-passthrough/v1",
+                "buildType": "https://github.com/xtoolsio/ximages-builds/upstream-passthrough/v1",
                 "externalParameters": {
                   "upstream": "$UPSTREAM_BASE/noble-server-cloudimg-amd64.img",
                   "upstreamChecksumSource": "$UPSTREAM_BASE/SHA256SUMS"
@@ -140,7 +140,7 @@ jobs:
         run: |
           cosign verify-blob \
             --bundle out/rekor-bundle.json \
-            --certificate-identity-regexp '^https://github\.com/xToolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$' \
+            --certificate-identity-regexp '^https://github\.com/xtoolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             out/image.qcow2
 
