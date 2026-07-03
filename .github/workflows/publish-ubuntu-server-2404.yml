@@ -7,8 +7,8 @@
 # GitHub OIDC identity, and publishes the 5-file artifact layout that
 # ximagesd's pull engine consumes:
 #
-#   ximages/official/ubuntu-server-24.04/amd64/proxmox/latest.json
-#   ximages/official/ubuntu-server-24.04/amd64/proxmox/<version>/
+#   ximages/official/ubuntu-server-24.04/amd64/xcompute/latest.json
+#   ximages/official/ubuntu-server-24.04/amd64/xcompute/<version>/
 #     manifest.json  image.qcow2  signature.sig  provenance.json  rekor-bundle.json
 #
 # The consumer-side contract (manifest schema v1 + URL layout) is
@@ -35,8 +35,8 @@ permissions:
   contents: read
 
 env:
-  FAMILY_ID: xtools/ubuntu-server-24.04/amd64/proxmox
-  FAMILY_PATH: ximages/official/ubuntu-server-24.04/amd64/proxmox
+  FAMILY_ID: xtools/ubuntu-server-24.04/amd64/xcompute
+  FAMILY_PATH: ximages/official/ubuntu-server-24.04/amd64/xcompute
   UPSTREAM_BASE: https://cloud-images.ubuntu.com/noble/current
 
 jobs:
@@ -87,7 +87,7 @@ jobs:
             "os": "ubuntu-server",
             "os_version": "24.04",
             "arch": "amd64",
-            "hypervisor": "proxmox",
+            "hypervisor": "xcompute",
             "name": "Ubuntu Server 24.04 LTS",
             "description": "Ubuntu Server 24.04 LTS (Noble Numbat) cloud image for xCompute, published and signed by xTools.",
             "version": "$VERSION",
@@ -134,6 +134,30 @@ jobs:
           { "version": "$VERSION", "published_at": "$NOW" }
           EOF
 
+          # index.json — the browse-and-pull picker's data source
+          # (ximagesd proxies it at GET /v1/admin/images/official).
+          # Regenerated wholesale here while this is the only family;
+          # once a second family workflow exists, index generation
+          # moves to a merge step across families.
+          cat > out/index.json <<EOF
+          {
+            "families": [
+              {
+                "family_id": "$FAMILY_ID",
+                "name": "Ubuntu Server 24.04 LTS",
+                "os": "ubuntu-server",
+                "os_version": "24.04",
+                "arch": "amd64",
+                "hypervisor": "xcompute",
+                "description": "Ubuntu Server 24.04 LTS (Noble Numbat) cloud image for xCompute, published and signed by xTools.",
+                "latest_version": "$VERSION",
+                "published_at": "$NOW",
+                "size_bytes": $SIZE
+              }
+            ]
+          }
+          EOF
+
           cat out/manifest.json
 
       - name: Verify locally what ximagesd will verify
@@ -162,6 +186,13 @@ jobs:
           # whose artifacts aren't fully uploaded yet.
           s3cmd put --acl-public out/latest.json \
             "s3://xtools-data/$FAMILY_PATH/latest.json" \
+            --host=sfo3.digitaloceanspaces.com \
+            --host-bucket="%(bucket)s.sfo3.digitaloceanspaces.com" \
+            --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
+            --secret_key=${{ secrets.SPACES_SECRET_KEY }}
+          # Family-level pointers flip after the artifacts land.
+          s3cmd put --acl-public out/index.json \
+            "s3://xtools-data/ximages/official/index.json" \
             --host=sfo3.digitaloceanspaces.com \
             --host-bucket="%(bucket)s.sfo3.digitaloceanspaces.com" \
             --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
