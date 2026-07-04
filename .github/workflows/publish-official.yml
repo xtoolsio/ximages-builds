@@ -1,0 +1,244 @@
+# Publish the xTools-official image catalog (Track A of xImages M3.0;
+# supersedes publish-ubuntu-server-2404.yml).
+#
+# families.json is the catalog source of truth. Each entry is an
+# upstream-passthrough build: download the distro's official cloud
+# image, verify the distro's published checksum, cosign-keyless sign
+# with this workflow's GitHub OIDC identity, and publish the 5-file
+# layout ximagesd consumes:
+#
+#   ximages/official/<slug>/<arch>/<hypervisor>/latest.json
+#   ximages/official/<slug>/<arch>/<hypervisor>/<version>/
+#     manifest.json  image.qcow2  signature.sig  provenance.json  rekor-bundle.json
+#
+# A final job regenerates ximages/official/index.json from what is
+# actually published (families that never published are omitted — the
+# catalog never lists an image that can't be pulled).
+#
+# Consumer-side contract: xTools monorepo xImages/server/internal/pull/official.go.
+# ximagesd's trust bundle allowlists this workflow's identity:
+#   ^https://github\.com/xtoolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$
+#
+# Windows Server / Windows 11 are NOT passthroughs — they are ISO-based
+# Packer builds (Track A3) and land as their own workflow.
+
+name: publish-official
+
+on:
+  workflow_dispatch:
+    inputs:
+      family:
+        description: "Publish only this family slug (empty = all)"
+        required: false
+        default: ""
+      version:
+        description: "Image version (YYYYMMDD); defaults to today"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write   # cosign keyless signing via GitHub OIDC
+  contents: read
+
+env:
+  SPACES_HOST: sfo3.digitaloceanspaces.com
+  BUCKET: xtools-data
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          FAM="${{ github.event.inputs.family }}"
+          matrix=$(jq -c --arg f "$FAM" '{include: [.[] | select($f == "" or .slug == $f)]}' families.json)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "$matrix" | jq .
+
+  publish:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: publish ${{ matrix.slug }}
+    env:
+      FAMILY_PATH: ximages/official/${{ matrix.slug }}/${{ matrix.arch }}/${{ matrix.hypervisor }}
+    steps:
+      - name: Resolve version
+        id: ver
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          [ -z "$VERSION" ] && VERSION="$(date -u +%Y%m%d)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download upstream image + verify distro checksum
+        run: |
+          UPSTREAM="${{ matrix.upstream_url }}"
+          FILE="$(basename "$UPSTREAM")"
+          curl -fsSL -o "$FILE" "$UPSTREAM"
+          curl -fsSL -o upstream-checksums "${{ matrix.checksum_url }}"
+          case "${{ matrix.checksum_format }}" in
+            sha256sums)
+              grep " [*]\?$FILE\$" upstream-checksums | sha256sum -c - ;;
+            sha512sums)
+              grep " [*]\?$FILE\$" upstream-checksums | sha512sum -c - ;;
+            bsd-sha256)
+              want=$(grep -E "^SHA256 \($FILE\) = " upstream-checksums | awk '{print $4}')
+              [ -n "$want" ] || { echo "no checksum entry for $FILE"; exit 1; }
+              got=$(sha256sum "$FILE" | cut -d' ' -f1)
+              [ "$want" = "$got" ] || { echo "checksum mismatch: want $want got $got"; exit 1; } ;;
+            *)
+              echo "unknown checksum_format"; exit 1 ;;
+          esac
+          mkdir -p out
+          mv "$FILE" out/image.qcow2
+          file out/image.qcow2 | grep -qi qcow || { echo "not a qcow2 image"; exit 1; }
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign (cosign keyless + Rekor offline bundle)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature out/signature.sig \
+            --bundle out/rekor-bundle.json \
+            out/image.qcow2
+
+      - name: Write manifest.json + provenance.json + latest.json
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          SHA256="$(sha256sum out/image.qcow2 | cut -d' ' -f1)"
+          SIZE="$(stat -c%s out/image.qcow2)"
+          IDENTITY="https://github.com/${{ github.repository }}/.github/workflows/publish-official.yml@${{ github.ref }}"
+
+          jq -n \
+            --arg family_id "${{ matrix.family_id }}" \
+            --arg os "${{ matrix.os }}" \
+            --arg os_version "${{ matrix.os_version }}" \
+            --arg arch "${{ matrix.arch }}" \
+            --arg hypervisor "${{ matrix.hypervisor }}" \
+            --arg name "${{ matrix.name }}" \
+            --arg description "${{ matrix.description }}" \
+            --arg version "$VERSION" \
+            --arg published_at "$NOW" \
+            --arg sha256 "$SHA256" \
+            --argjson size "$SIZE" \
+            --arg identity "$IDENTITY" \
+            '{schema_version: 1, family_id: $family_id, os: $os, os_version: $os_version,
+              arch: $arch, hypervisor: $hypervisor, name: $name, description: $description,
+              version: $version, published_at: $published_at,
+              qcow2: {file: "image.qcow2", sha256: $sha256, size_bytes: $size},
+              signing_identity: $identity}' > out/manifest.json
+
+          jq -n \
+            --arg sha256 "$SHA256" \
+            --arg upstream "${{ matrix.upstream_url }}" \
+            --arg checksums "${{ matrix.checksum_url }}" \
+            --arg repo_uri "git+https://github.com/${{ github.repository }}@${{ github.ref }}" \
+            --arg commit "${{ github.sha }}" \
+            --arg identity "$IDENTITY" \
+            --arg run "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg started "$NOW" \
+            '{"_type": "https://in-toto.io/Statement/v1",
+              subject: [{name: "image.qcow2", digest: {sha256: $sha256}}],
+              predicateType: "https://slsa.dev/provenance/v1",
+              predicate: {
+                buildDefinition: {
+                  buildType: "https://github.com/xtoolsio/ximages-builds/upstream-passthrough/v1",
+                  externalParameters: {upstream: $upstream, upstreamChecksumSource: $checksums},
+                  resolvedDependencies: [{uri: $repo_uri, digest: {gitCommit: $commit}}]},
+                runDetails: {builder: {id: $identity},
+                  metadata: {invocationId: $run, startedOn: $started}}}}' > out/provenance.json
+
+          jq -n --arg version "$VERSION" --arg published_at "$NOW" \
+            '{version: $version, published_at: $published_at}' > out/latest.json
+
+          cat out/manifest.json
+
+      - name: Verify locally what ximagesd will verify
+        run: |
+          cosign verify-blob \
+            --bundle out/rekor-bundle.json \
+            --certificate-identity-regexp '^https://github\.com/xtoolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            out/image.qcow2
+
+      - name: Install s3cmd
+        run: sudo apt-get update -q && sudo apt-get install -y s3cmd
+
+      - name: Upload to download.xtools.com (DO Spaces)
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          put() { s3cmd put --acl-public "$@" \
+            --host="$SPACES_HOST" \
+            --host-bucket="%(bucket)s.$SPACES_HOST" \
+            --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
+            --secret_key=${{ secrets.SPACES_SECRET_KEY }}; }
+          for f in manifest.json image.qcow2 signature.sig provenance.json rekor-bundle.json; do
+            put "out/$f" "s3://$BUCKET/$FAMILY_PATH/$VERSION/$f"
+          done
+          # Pointer flips last, with a short CDN TTL so new versions
+          # surface quickly.
+          put --add-header="Cache-Control: max-age=60" out/latest.json "s3://$BUCKET/$FAMILY_PATH/latest.json"
+
+  index:
+    needs: publish
+    if: always()   # regenerate from whatever is actually published
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build index.json from published families
+        run: |
+          # Read from the Spaces origin (not the CDN) so a republish
+          # can't be masked by a stale CDN cache.
+          ORIGIN="https://$BUCKET.$SPACES_HOST"
+          : > entries.jsonl
+          jq -c '.[]' families.json | while read -r fam; do
+            slug=$(jq -r .slug <<<"$fam")
+            arch=$(jq -r .arch <<<"$fam")
+            hyp=$(jq -r .hypervisor <<<"$fam")
+            path="ximages/official/$slug/$arch/$hyp"
+            if ! latest=$(curl -fsS "$ORIGIN/$path/latest.json"); then
+              echo "::warning::$slug has no published latest.json — omitted from index"
+              continue
+            fi
+            ver=$(jq -r .version <<<"$latest")
+            if ! manifest=$(curl -fsS "$ORIGIN/$path/$ver/manifest.json"); then
+              echo "::warning::$slug latest=$ver has no manifest — omitted from index"
+              continue
+            fi
+            jq -n --argjson fam "$fam" --argjson man "$manifest" \
+              '{family_id: $fam.family_id, name: $fam.name, os: $fam.os,
+                os_version: $fam.os_version, arch: $fam.arch, hypervisor: $fam.hypervisor,
+                description: $fam.description, latest_version: $man.version,
+                published_at: $man.published_at, size_bytes: $man.qcow2.size_bytes}' >> entries.jsonl
+          done
+          jq -s '{families: .}' entries.jsonl > index.json
+          jq . index.json
+
+      - name: Install s3cmd
+        run: sudo apt-get update -q && sudo apt-get install -y s3cmd
+
+      - name: Upload index.json
+        run: |
+          s3cmd put --acl-public --add-header="Cache-Control: max-age=60" index.json \
+            "s3://$BUCKET/ximages/official/index.json" \
+            --host="$SPACES_HOST" \
+            --host-bucket="%(bucket)s.$SPACES_HOST" \
+            --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
+            --secret_key=${{ secrets.SPACES_SECRET_KEY }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### xImages official catalog published :package:"
+            echo ""
+            echo '```json'
+            cat index.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
