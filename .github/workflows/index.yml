@@ -1,0 +1,67 @@
+# Regenerate ximages/official/index.json from what is actually
+# published (reads the Spaces origin, not the CDN, so a republish can't
+# be masked by a stale cache). Called by every publish workflow; can be
+# dispatched standalone to repair the index.
+
+name: index
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  SPACES_HOST: sfo3.digitaloceanspaces.com
+  BUCKET: xtools-data
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build index.json from published families
+        run: |
+          ORIGIN="https://$BUCKET.$SPACES_HOST"
+          : > entries.jsonl
+          jq -c '.[]' families.json | while read -r fam; do
+            slug=$(jq -r .slug <<<"$fam")
+            arch=$(jq -r .arch <<<"$fam")
+            hyp=$(jq -r .hypervisor <<<"$fam")
+            path="ximages/official/$slug/$arch/$hyp"
+            if ! latest=$(curl -fsS "$ORIGIN/$path/latest.json"); then
+              echo "::warning::$slug has no published latest.json — omitted from index"
+              continue
+            fi
+            ver=$(jq -r .version <<<"$latest")
+            if ! manifest=$(curl -fsS "$ORIGIN/$path/$ver/manifest.json"); then
+              echo "::warning::$slug latest=$ver has no manifest — omitted from index"
+              continue
+            fi
+            jq -n --argjson fam "$fam" --argjson man "$manifest" \
+              '{family_id: $fam.family_id, name: $fam.name, os: $fam.os,
+                os_version: $fam.os_version, arch: $fam.arch, hypervisor: $fam.hypervisor,
+                description: $fam.description, latest_version: $man.version,
+                published_at: $man.published_at, size_bytes: $man.qcow2.size_bytes}' >> entries.jsonl
+          done
+          jq -s '{families: .}' entries.jsonl > index.json
+          jq . index.json
+
+      - name: Install s3cmd
+        run: sudo apt-get update -q && sudo apt-get install -y s3cmd
+
+      - name: Upload index.json
+        run: |
+          s3cmd put --acl-public --add-header="Cache-Control: max-age=60" index.json \
+            "s3://$BUCKET/ximages/official/index.json" \
+            --host="$SPACES_HOST" \
+            --host-bucket="%(bucket)s.$SPACES_HOST" \
+            --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
+            --secret_key=${{ secrets.SPACES_SECRET_KEY }}
+
+      - name: Summary
+        run: |
+          {
+            echo "### xImages official index regenerated :card_index_dividers:"
+            echo '```json'
+            cat index.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

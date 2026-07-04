@@ -76,5 +76,16 @@
     "upstream_url": "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2",
     "checksum_url": "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/CHECKSUM",
     "checksum_format": "sha256sums"
+  },
+  {
+    "slug": "windows-server-2025",
+    "family_id": "xtools/windows-server-2025/amd64/xcompute",
+    "name": "Windows Server 2025 (Evaluation)",
+    "os": "windows-server",
+    "os_version": "2025",
+    "arch": "amd64",
+    "hypervisor": "xcompute",
+    "description": "Windows Server 2025 Standard (Desktop Experience) built from Microsoft 180-day evaluation media, with virtio drivers, QEMU guest agent, and Cloudbase-Init. Production use requires the customer's own Windows licensing.",
+    "build": "packer-windows"
   }
 ]
