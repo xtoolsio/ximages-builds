@@ -91,6 +91,12 @@ jobs:
               [ -n "$want" ] || { echo "no checksum entry for $FILE"; exit 1; }
               got=$(sha256sum "$FILE" | cut -d' ' -f1)
               [ "$want" = "$got" ] || { echo "checksum mismatch: want $want got $got"; exit 1; } ;;
+            bsd-sha256-any)
+              # The checksum file lists versioned filenames while we
+              # download a "-latest" alias — verify the bytes match ANY
+              # hash the distro published in the file.
+              got=$(sha256sum "$FILE" | cut -d' ' -f1)
+              grep -q "= $got\$" upstream-checksums || { echo "downloaded bytes match no published checksum (got $got)"; exit 1; } ;;
             *)
               echo "unknown checksum_format"; exit 1 ;;
           esac

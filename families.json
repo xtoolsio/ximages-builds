@@ -75,6 +75,6 @@
     "description": "AlmaLinux 9 generic cloud image (RHEL-compatible) for xCompute, published and signed by xTools.",
     "upstream_url": "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2",
     "checksum_url": "https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/CHECKSUM",
-    "checksum_format": "bsd-sha256"
+    "checksum_format": "bsd-sha256-any"
   }
 ]
