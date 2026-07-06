@@ -48,7 +48,9 @@ source "qemu" "ws2025" {
   format       = "qcow2"
 
   # Inbox-driver hardware for the build; virtio comes via provisioner.
-  disk_interface   = "sata"
+  # (ide, not sata: packer maps disk_interface to qemu's `-drive if=`,
+  # which accepts ide/scsi/virtio on the pc machine, not sata.)
+  disk_interface   = "ide"
   net_device       = "e1000"
   output_directory = var.output_dir
   vm_name          = "ws2025.qcow2"
