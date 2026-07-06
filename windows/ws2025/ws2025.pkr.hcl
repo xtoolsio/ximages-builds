@@ -67,9 +67,9 @@ source "qemu" "ws2025" {
   winrm_timeout  = "2h"
   winrm_use_ssl  = false
 
-  # Sysprep generalize IS the shutdown: strips the build identity and
-  # hands first-boot to Cloudbase-Init (its conf ships the unattend).
-  shutdown_command = "C:\\Windows\\System32\\Sysprep\\sysprep.exe /generalize /oobe /quiet /shutdown /unattend:\"C:\\Program Files\\Cloudbase Solutions\\Cloudbase-Init\\conf\\Unattend.xml\""
+  # Sysprep already ran (generalize) in the provisioner; just power
+  # off cleanly to preserve the generalized state.
+  shutdown_command = "shutdown /s /t 15 /f /c \"packer\""
   shutdown_timeout = "30m"
 
   qemuargs = [

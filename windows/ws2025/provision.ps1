@@ -83,4 +83,25 @@ Write-Host '== cleanup =='
 Remove-Item $virtio, $cbi -Force -ErrorAction SilentlyContinue
 Remove-Item 'C:\Windows\Temp\*' -Recurse -Force -ErrorAction SilentlyContinue
 
+# Sysprep /generalize here (in the provisioner, NOT as Packer's
+# shutdown_command over WinRM) so a hang or error is VISIBLE with its
+# log instead of a blind 30-minute shutdown timeout. No /shutdown: the
+# box stays up and generalized; Packer's shutdown_command powers it off
+# cleanly, preserving the generalized state for first-boot OOBE +
+# Cloudbase-Init.
+Write-Host '== sysprep /generalize =='
+$unattend = 'C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml'
+if (-not (Test-Path $unattend)) { throw "sysprep unattend missing: $unattend" }
+$panther = 'C:\Windows\System32\Sysprep\Panther\setupact.log'
+Remove-Item $panther -Force -ErrorAction SilentlyContinue
+$p = Start-Process -FilePath 'C:\Windows\System32\Sysprep\sysprep.exe' `
+  -ArgumentList '/generalize','/oobe','/quiet','/unattend:"'+$unattend+'"' -Wait -PassThru
+Write-Host "sysprep exit $($p.ExitCode)"
+if ($p.ExitCode -ne 0) {
+  Write-Host '== last 60 lines of sysprep setupact.log =='
+  if (Test-Path $panther) { Get-Content $panther -Tail 60 | ForEach-Object { Write-Host $_ } }
+  throw "sysprep failed with exit $($p.ExitCode)"
+}
+Write-Host 'sysprep complete — image generalized'
+
 Write-Host 'provisioning complete'
