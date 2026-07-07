@@ -140,13 +140,20 @@ jobs:
 
           cat out/manifest.json
 
+      - name: Sign the manifest (what ximagesd verifies)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature out/manifest.sig \
+            --bundle out/manifest-bundle.json \
+            out/manifest.json
+
       - name: Verify locally what ximagesd will verify
         run: |
           cosign verify-blob \
-            --bundle out/rekor-bundle.json \
+            --bundle out/manifest-bundle.json \
             --certificate-identity-regexp '^https://github\.com/xtoolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            out/image.qcow2
+            out/manifest.json
 
       - name: Install s3cmd
         run: sudo apt-get install -y s3cmd
@@ -161,7 +168,7 @@ jobs:
             --host-bucket="%(bucket)s.$SPACES_HOST" \
             --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
             --secret_key=${{ secrets.SPACES_SECRET_KEY }}; }
-          for f in manifest.json image.qcow2 signature.sig provenance.json rekor-bundle.json; do
+          for f in manifest.json manifest.sig manifest-bundle.json image.qcow2 signature.sig provenance.json rekor-bundle.json; do
             put "out/$f" "s3://$BUCKET/$FAMILY_PATH/$VERSION/$f"
           done
           put --add-header="Cache-Control: max-age=60" out/latest.json "s3://$BUCKET/$FAMILY_PATH/latest.json"

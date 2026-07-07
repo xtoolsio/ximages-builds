@@ -1,0 +1,66 @@
+# Backfill manifest signatures for already-published images without
+# rebuilding them. ximagesd verifies the signed manifest.json (which
+# commits to the qcow2's sha256) instead of re-hashing the multi-GB
+# blob, so verification memory is flat regardless of image size. This
+# job downloads each family's current manifest.json, cosign-signs it,
+# and uploads manifest.sig + manifest-bundle.json next to it.
+#
+# Run once after adopting manifest-based verification; new publishes
+# sign the manifest inline.
+
+name: resign-manifests
+
+on:
+  workflow_dispatch:
+    inputs:
+      family:
+        description: "Only this family slug (empty = all)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write   # cosign keyless signing via GitHub OIDC
+  contents: read
+
+env:
+  SPACES_HOST: sfo3.digitaloceanspaces.com
+  BUCKET: xtools-data
+
+jobs:
+  resign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Install s3cmd
+        run: sudo apt-get update -q && sudo apt-get install -y s3cmd
+
+      - name: Sign each published manifest
+        run: |
+          ORIGIN="https://$BUCKET.$SPACES_HOST"
+          FILTER="${{ github.event.inputs.family }}"
+          rc=0
+          jq -c '.[]' families.json | while read -r fam; do
+            slug=$(jq -r .slug <<<"$fam")
+            [ -n "$FILTER" ] && [ "$FILTER" != "$slug" ] && continue
+            arch=$(jq -r .arch <<<"$fam"); hyp=$(jq -r .hypervisor <<<"$fam")
+            path="ximages/official/$slug/$arch/$hyp"
+            latest=$(curl -fsS "$ORIGIN/$path/latest.json") || { echo "::warning::$slug not published — skipped"; continue; }
+            ver=$(jq -r .version <<<"$latest")
+            if ! curl -fsS "$ORIGIN/$path/$ver/manifest.json" -o manifest.json; then
+              echo "::warning::$slug $ver manifest missing — skipped"; continue
+            fi
+            echo "signing $slug $ver"
+            cosign sign-blob --yes \
+              --output-signature manifest.sig \
+              --bundle manifest-bundle.json \
+              manifest.json
+            for f in manifest.sig manifest-bundle.json; do
+              s3cmd put --acl-public "$f" "s3://$BUCKET/$path/$ver/$f" \
+                --host="$SPACES_HOST" --host-bucket="%(bucket)s.$SPACES_HOST" \
+                --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
+                --secret_key=${{ secrets.SPACES_SECRET_KEY }}
+            done
+            rm -f manifest.json manifest.sig manifest-bundle.json
+          done
