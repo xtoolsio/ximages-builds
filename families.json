@@ -80,23 +80,23 @@
   {
     "slug": "windows-server-2025",
     "family_id": "xtools/windows-server-2025/amd64/xcompute",
-    "name": "Windows Server 2025 (Evaluation)",
+    "name": "Windows Server 2025",
     "os": "windows-server",
     "os_version": "2025",
     "arch": "amd64",
     "hypervisor": "xcompute",
-    "description": "Windows Server 2025 Standard (Desktop Experience) built from Microsoft 180-day evaluation media, with virtio drivers, QEMU guest agent, and Cloudbase-Init. Production use requires the customer's own Windows licensing.",
+    "description": "Windows Server 2025 Standard with Desktop Experience, preloaded with virtio drivers, the QEMU guest agent, and Cloudbase-Init for cloud provisioning. Bring your own Windows Server license.",
     "build": "packer-windows"
   },
   {
     "slug": "windows-server-2022",
     "family_id": "xtools/windows-server-2022/amd64/xcompute",
-    "name": "Windows Server 2022 (Evaluation)",
+    "name": "Windows Server 2022",
     "os": "windows-server",
     "os_version": "2022",
     "arch": "amd64",
     "hypervisor": "xcompute",
-    "description": "Windows Server 2022 Standard (Desktop Experience) built from Microsoft 180-day evaluation media, with virtio drivers, QEMU guest agent, and Cloudbase-Init. Production use requires the customer's own Windows licensing.",
+    "description": "Windows Server 2022 Standard with Desktop Experience, preloaded with virtio drivers, the QEMU guest agent, and Cloudbase-Init for cloud provisioning. Bring your own Windows Server license.",
     "build": "packer-windows"
   }
 ]
