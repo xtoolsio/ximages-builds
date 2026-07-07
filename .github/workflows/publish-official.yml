@@ -78,12 +78,34 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Download upstream image + verify distro checksum
+        env:
+          UPSTREAM_URL: ${{ matrix.upstream_url }}
+          CHECKSUM_URL: ${{ matrix.checksum_url }}
+          UPSTREAM_DIR: ${{ matrix.upstream_dir }}
+          QCOW2_GLOB: ${{ matrix.qcow2_glob }}
+          CHECKSUM_GLOB: ${{ matrix.checksum_glob }}
+          CKFMT: ${{ matrix.checksum_format }}
         run: |
-          UPSTREAM="${{ matrix.upstream_url }}"
-          FILE="$(basename "$UPSTREAM")"
-          curl -fsSL -o "$FILE" "$UPSTREAM"
-          curl -fsSL -o upstream-checksums "${{ matrix.checksum_url }}"
-          case "${{ matrix.checksum_format }}" in
+          # Directory-resolve mode (Fedora): the qcow2 + checksum names
+          # carry a respin version with no "-latest" alias, so pick the
+          # newest matching file from the images directory listing.
+          if [ -n "$UPSTREAM_DIR" ]; then
+            listing=$(curl -fsSL "$UPSTREAM_DIR")
+            qfile=$(printf '%s' "$listing" | grep -oE "$QCOW2_GLOB" | sort -Vu | tail -1)
+            cfile=$(printf '%s' "$listing" | grep -oE "$CHECKSUM_GLOB" | sort -Vu | tail -1)
+            [ -n "$qfile" ] && [ -n "$cfile" ] || { echo "resolve failed in $UPSTREAM_DIR (qcow2='$qfile' checksum='$cfile')"; exit 1; }
+            UPSTREAM_URL="$UPSTREAM_DIR$qfile"
+            CHECKSUM_URL="$UPSTREAM_DIR$cfile"
+            echo "resolved qcow2:    $UPSTREAM_URL"
+            echo "resolved checksum: $CHECKSUM_URL"
+          fi
+          # Carry the effective URLs to later steps (provenance).
+          echo "RESOLVED_UPSTREAM=$UPSTREAM_URL" >> "$GITHUB_ENV"
+          echo "RESOLVED_CHECKSUMS=$CHECKSUM_URL" >> "$GITHUB_ENV"
+          FILE="$(basename "$UPSTREAM_URL")"
+          curl -fsSL -o "$FILE" "$UPSTREAM_URL"
+          curl -fsSL -o upstream-checksums "$CHECKSUM_URL"
+          case "$CKFMT" in
             sha256sums)
               grep " [*]\?$FILE\$" upstream-checksums | sha256sum -c - ;;
             sha512sums)
@@ -145,8 +167,8 @@ jobs:
 
           jq -n \
             --arg sha256 "$SHA256" \
-            --arg upstream "${{ matrix.upstream_url }}" \
-            --arg checksums "${{ matrix.checksum_url }}" \
+            --arg upstream "$RESOLVED_UPSTREAM" \
+            --arg checksums "$RESOLVED_CHECKSUMS" \
             --arg repo_uri "git+https://github.com/${{ github.repository }}@${{ github.ref }}" \
             --arg commit "${{ github.sha }}" \
             --arg identity "$IDENTITY" \
