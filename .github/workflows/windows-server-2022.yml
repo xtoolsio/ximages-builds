@@ -129,7 +129,7 @@ jobs:
                 buildDefinition: {
                   buildType: "https://github.com/xtoolsio/ximages-builds/packer-windows/v1",
                   externalParameters: {
-                    iso: "Microsoft Windows Server 2022 Evaluation (go.microsoft.com fwlink 2195333)",
+                    iso: "Microsoft Windows Server 2022 Evaluation (go.microsoft.com fwlink 2195280)",
                     packerTemplate: "windows/ws2022/ws2022.pkr.hcl"},
                   resolvedDependencies: [{uri: $repo_uri, digest: {gitCommit: $commit}}]},
                 runDetails: {builder: {id: $identity},

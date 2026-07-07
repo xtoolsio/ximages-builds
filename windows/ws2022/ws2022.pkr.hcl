@@ -20,7 +20,7 @@ packer {
 
 variable "iso_url" {
   type    = string
-  default = "https://go.microsoft.com/fwlink/?linkid=2195333&clcid=0x409&culture=en-us&country=us"
+  default = "https://go.microsoft.com/fwlink/?linkid=2195280&clcid=0x409&culture=en-us&country=us"
 }
 
 # TODO: pin after the first successful CI run logs the real hash —
