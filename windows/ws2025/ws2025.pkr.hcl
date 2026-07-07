@@ -64,7 +64,7 @@ source "qemu" "ws2025" {
   communicator   = "winrm"
   winrm_username = "Administrator"
   winrm_password = "xToolsBuild2026!"
-  winrm_timeout  = "2h"
+  winrm_timeout  = "3h30m"
   winrm_use_ssl  = false
 
   # Sysprep already ran (generalize) in the provisioner; just power
