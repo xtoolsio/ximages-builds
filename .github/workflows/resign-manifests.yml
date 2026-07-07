@@ -51,12 +51,18 @@ jobs:
             if ! curl -fsS "$ORIGIN/$path/$ver/manifest.json" -o manifest.json; then
               echo "::warning::$slug $ver manifest missing — skipped"; continue
             fi
+            # Refresh name + description from families.json (the catalog
+            # source of truth) so display copy edits don't need a rebuild;
+            # everything else in the manifest is preserved.
+            name=$(jq -r .name <<<"$fam"); desc=$(jq -r .description <<<"$fam")
+            jq --arg n "$name" --arg d "$desc" '.name=$n | .description=$d' manifest.json > manifest.new
+            mv manifest.new manifest.json
             echo "signing $slug $ver"
             cosign sign-blob --yes \
               --output-signature manifest.sig \
               --bundle manifest-bundle.json \
               manifest.json
-            for f in manifest.sig manifest-bundle.json; do
+            for f in manifest.json manifest.sig manifest-bundle.json; do
               s3cmd put --acl-public "$f" "s3://$BUCKET/$path/$ver/$f" \
                 --host="$SPACES_HOST" --host-bucket="%(bucket)s.$SPACES_HOST" \
                 --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
