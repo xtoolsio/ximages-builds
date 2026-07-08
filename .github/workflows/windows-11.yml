@@ -51,7 +51,7 @@ jobs:
       - name: Install QEMU + Packer
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf xorriso swtpm swtpm-tools
+          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf xorriso swtpm swtpm-tools gvncviewer
           echo "== OVMF secure-boot firmware =="; ls -l /usr/share/OVMF/OVMF_CODE_4M.secboot.fd /usr/share/OVMF/OVMF_VARS_4M.ms.fd
           command -v swtpm >/dev/null || { echo "swtpm missing"; exit 1; }
           curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
@@ -78,7 +78,28 @@ jobs:
           file virtio-win.iso | grep -qi 'ISO 9660' || { echo "virtio-win.iso is not an ISO"; exit 1; }
           export PKR_VAR_virtio_iso="$PWD/virtio-win.iso"
           packer init .
-          packer build -timestamp-ui . || { echo "== last 200 packer log lines =="; tail -200 packer.log; exit 1; }
+          # Screenshot the guest console (VNC :99) every 30s so we can SEE
+          # what a hang is stuck on instead of flying blind. Shots upload
+          # as an artifact even on failure.
+          mkdir -p "$GITHUB_WORKSPACE/win11-shots"
+          ( n=0; while true; do n=$((n+1));
+              gvnccapture 127.0.0.1:99 "$GITHUB_WORKSPACE/win11-shots/$(printf '%04d' $n)-$(date -u +%H%M%S).png" >/dev/null 2>&1 || true;
+              sleep 30; done ) &
+          SHOT_PID=$!
+          set +e
+          packer build -timestamp-ui .
+          RC=$?
+          kill $SHOT_PID 2>/dev/null || true
+          if [ $RC -ne 0 ]; then echo "== last 200 packer log lines =="; tail -200 packer.log; fi
+          exit $RC
+
+      - name: Upload guest screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: win11-console-screenshots
+          path: win11-shots/
+          if-no-files-found: warn
 
       - name: Compress qcow2
         run: |

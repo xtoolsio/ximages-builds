@@ -51,6 +51,11 @@ source "qemu" "win11" {
 
   accelerator = "kvm"
   headless    = true
+  # Pin VNC (display :99 -> port 5999) so CI can screenshot the guest.
+  vnc_bind_address = "127.0.0.1"
+  vnc_port_min     = 5999
+  vnc_port_max     = 5999
+  vnc_use_password = false
   # q35 + smm required for Secure Boot; smm appended to the machine type.
   machine_type = "q35,smm=on"
   cpus         = 2
@@ -85,7 +90,7 @@ source "qemu" "win11" {
   communicator   = "winrm"
   winrm_username = "Administrator"
   winrm_password = "xToolsBuild2026!"
-  winrm_timeout  = "3h30m"
+  winrm_timeout  = "1h30m"
   winrm_use_ssl  = false
 
   # Sysprep runs in the provisioner; just power off cleanly.
