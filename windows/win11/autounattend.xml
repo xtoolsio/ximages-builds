@@ -21,6 +21,28 @@
       <UILanguage>en-US</UILanguage>
       <UserLocale>en-US</UserLocale>
     </component>
+    <!--
+      Load the virtio-blk (viostor) driver so WinPE Setup sees the
+      virtio disk. The virtio-win ISO's drive letter in WinPE isn't
+      fixed, so list candidate letters; Setup ignores paths that don't
+      exist. Windows 11 driver folder is w11.
+    -->
+    <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <DriverPaths>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="1">
+          <Path>D:\viostor\w11\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="2">
+          <Path>E:\viostor\w11\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="3">
+          <Path>F:\viostor\w11\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="4">
+          <Path>G:\viostor\w11\amd64</Path>
+        </PathAndCredentials>
+      </DriverPaths>
+    </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <DiskConfiguration>
         <Disk wcm:action="add">

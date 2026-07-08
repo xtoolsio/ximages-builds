@@ -38,6 +38,13 @@ variable "output_dir" {
   default = "output"
 }
 
+# Absolute path to the virtio-win ISO, attached as an extra CD so
+# Windows Setup can load the virtio-blk (viostor) boot driver.
+variable "virtio_iso" {
+  type    = string
+  default = ""
+}
+
 source "qemu" "win11" {
   iso_url      = var.iso_url
   iso_checksum = var.iso_checksum
@@ -51,8 +58,12 @@ source "qemu" "win11" {
   disk_size    = "64G"
   format       = "qcow2"
 
-  # Inbox-driver hardware for the build; virtio comes via the provisioner.
-  disk_interface   = "sata"
+  # q35 has no legacy IDE/floppy and QEMU has no `if=sata` bus, so the
+  # boot disk is virtio-blk; its viostor driver is injected into Setup
+  # from the virtio-win ISO (see autounattend windowsPE + qemuargs). The
+  # deployed image is virtio-native as a result. NIC stays e1000 (inbox)
+  # for the build; NetKVM is added by the provisioner.
+  disk_interface   = "virtio"
   net_device       = "e1000"
   output_directory = var.output_dir
   vm_name          = "win11.qcow2"
@@ -85,6 +96,8 @@ source "qemu" "win11" {
     ["-cpu", "host"],
     # Protect the Secure Boot variable store (pairs with smm=on).
     ["-global", "driver=cfi.pflash01,property=secure,value=on"],
+    # virtio-win ISO so WinPE can load the viostor boot driver.
+    ["-drive", "file=${var.virtio_iso},media=cdrom"],
   ]
 }
 

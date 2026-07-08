@@ -72,6 +72,11 @@ jobs:
           PACKER_LOG: "1"
           PACKER_LOG_PATH: packer.log
         run: |
+          # virtio-win ISO for the viostor boot-driver injection (q35 has
+          # no inbox disk bus). Verify it's a real ISO before building.
+          curl -fsSL -o virtio-win.iso https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+          file virtio-win.iso | grep -qi 'ISO 9660' || { echo "virtio-win.iso is not an ISO"; exit 1; }
+          export PKR_VAR_virtio_iso="$PWD/virtio-win.iso"
           packer init .
           packer build -timestamp-ui . || { echo "== last 200 packer log lines =="; tail -200 packer.log; exit 1; }
 
