@@ -1,0 +1,181 @@
+# Build + publish the Windows Server 2025 (Evaluation) image (Track A3).
+#
+# Unlike the Linux passthroughs, this BUILDS the image: Microsoft
+# evaluation ISO → unattended install under QEMU/KVM on the runner →
+# virtio drivers + QEMU guest agent + Cloudbase-Init → sysprep
+# /generalize → compressed qcow2 → cosign sign → publish in the same
+# 5-file layout as every other official image. Sources: windows/win11/.
+#
+# Licensing: 180-day evaluation media, clearly labeled — production
+# use requires the customer's own licensing (BYOL/SPLA).
+
+name: windows-11
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image version (YYYYMMDD); defaults to today"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write   # cosign keyless signing via GitHub OIDC
+  contents: read
+
+env:
+  SPACES_HOST: sfo3.digitaloceanspaces.com
+  BUCKET: xtools-data
+  SLUG: windows-11
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af || true
+          df -h / /mnt
+
+      - name: Enable KVM for the runner user
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install QEMU + Packer
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y qemu-system-x86 qemu-utils ovmf xorriso swtpm swtpm-tools
+          echo "== OVMF secure-boot firmware =="; ls -l /usr/share/OVMF/OVMF_CODE_4M.secboot.fd /usr/share/OVMF/OVMF_VARS_4M.ms.fd
+          command -v swtpm >/dev/null || { echo "swtpm missing"; exit 1; }
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+          sudo apt-get update -q && sudo apt-get install -y packer
+          packer version
+
+      - name: Resolve version
+        id: ver
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          [ -z "$VERSION" ] && VERSION="$(date -u +%Y%m%d)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Packer build (unattended install + provision + sysprep)
+        working-directory: windows/win11
+        env:
+          PACKER_LOG: "1"
+          PACKER_LOG_PATH: packer.log
+        run: |
+          packer init .
+          packer build -timestamp-ui . || { echo "== last 200 packer log lines =="; tail -200 packer.log; exit 1; }
+
+      - name: Compress qcow2
+        run: |
+          mkdir -p out
+          qemu-img convert -O qcow2 -c windows/win11/output/win11.qcow2 out/image.qcow2
+          rm -rf windows/win11/output
+          qemu-img info out/image.qcow2
+          df -h /
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign (cosign keyless + Rekor offline bundle)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature out/signature.sig \
+            --bundle out/rekor-bundle.json \
+            out/image.qcow2
+
+      - name: Write manifest.json + provenance.json + latest.json
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          SHA256="$(sha256sum out/image.qcow2 | cut -d' ' -f1)"
+          SIZE="$(stat -c%s out/image.qcow2)"
+          IDENTITY="https://github.com/${{ github.repository }}/.github/workflows/windows-11.yml@${{ github.ref }}"
+          FAM=$(jq -c --arg s "$SLUG" '.[] | select(.slug == $s)' families.json)
+          [ -n "$FAM" ] || { echo "family $SLUG missing from families.json"; exit 1; }
+
+          jq -n \
+            --argjson fam "$FAM" \
+            --arg version "$VERSION" \
+            --arg published_at "$NOW" \
+            --arg sha256 "$SHA256" \
+            --argjson size "$SIZE" \
+            --arg identity "$IDENTITY" \
+            '{schema_version: 1, family_id: $fam.family_id, os: $fam.os,
+              os_version: $fam.os_version, arch: $fam.arch, hypervisor: $fam.hypervisor,
+              name: $fam.name, description: $fam.description,
+              version: $version, published_at: $published_at,
+              qcow2: {file: "image.qcow2", sha256: $sha256, size_bytes: $size},
+              signing_identity: $identity}' > out/manifest.json
+
+          jq -n \
+            --arg sha256 "$SHA256" \
+            --arg repo_uri "git+https://github.com/${{ github.repository }}@${{ github.ref }}" \
+            --arg commit "${{ github.sha }}" \
+            --arg identity "$IDENTITY" \
+            --arg run "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg started "$NOW" \
+            '{"_type": "https://in-toto.io/Statement/v1",
+              subject: [{name: "image.qcow2", digest: {sha256: $sha256}}],
+              predicateType: "https://slsa.dev/provenance/v1",
+              predicate: {
+                buildDefinition: {
+                  buildType: "https://github.com/xtoolsio/ximages-builds/packer-windows/v1",
+                  externalParameters: {
+                    iso: "Microsoft Windows 11 Enterprise Evaluation 24H2 (go.microsoft.com fwlink 2289031)",
+                    packerTemplate: "windows/win11/win11.pkr.hcl"},
+                  resolvedDependencies: [{uri: $repo_uri, digest: {gitCommit: $commit}}]},
+                runDetails: {builder: {id: $identity},
+                  metadata: {invocationId: $run, startedOn: $started}}}}' > out/provenance.json
+
+          jq -n --arg version "$VERSION" --arg published_at "$NOW" \
+            '{version: $version, published_at: $published_at}' > out/latest.json
+
+          cat out/manifest.json
+
+      - name: Sign the manifest (what ximagesd verifies)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature out/manifest.sig \
+            --bundle out/manifest-bundle.json \
+            out/manifest.json
+
+      - name: Verify locally what ximagesd will verify
+        run: |
+          cosign verify-blob \
+            --bundle out/manifest-bundle.json \
+            --certificate-identity-regexp '^https://github\.com/xtoolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            out/manifest.json
+
+      - name: Install s3cmd
+        run: sudo apt-get install -y s3cmd
+
+      - name: Upload to download.xtools.com (DO Spaces)
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          FAM=$(jq -c --arg s "$SLUG" '.[] | select(.slug == $s)' families.json)
+          FAMILY_PATH="ximages/official/$SLUG/$(jq -r .arch <<<"$FAM")/$(jq -r .hypervisor <<<"$FAM")"
+          put() { s3cmd put --acl-public "$@" \
+            --host="$SPACES_HOST" \
+            --host-bucket="%(bucket)s.$SPACES_HOST" \
+            --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
+            --secret_key=${{ secrets.SPACES_SECRET_KEY }}; }
+          for f in manifest.json manifest.sig manifest-bundle.json image.qcow2 signature.sig provenance.json rekor-bundle.json; do
+            put "out/$f" "s3://$BUCKET/$FAMILY_PATH/$VERSION/$f"
+          done
+          put --add-header="Cache-Control: max-age=60" out/latest.json "s3://$BUCKET/$FAMILY_PATH/latest.json"
+
+  index:
+    needs: build
+    uses: ./.github/workflows/index.yml
+    secrets: inherit

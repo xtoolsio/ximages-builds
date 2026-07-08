@@ -217,5 +217,16 @@
     "upstream_dir": "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/",
     "qcow2_glob": "Fedora-Cloud-Base-Generic-44-[0-9.]+\\.x86_64\\.qcow2",
     "checksum_glob": "Fedora-Cloud-44-[0-9.]+-x86_64-CHECKSUM"
+  },
+  {
+    "slug": "windows-11",
+    "family_id": "xtools/windows-11/amd64/xcompute",
+    "name": "Windows 11 Enterprise",
+    "os": "windows-11",
+    "os_version": "24H2",
+    "arch": "amd64",
+    "hypervisor": "xcompute",
+    "description": "Windows 11 Enterprise (24H2) built with real UEFI + Secure Boot + TPM 2.0, preloaded with virtio drivers, the QEMU guest agent, and Cloudbase-Init for cloud provisioning. Requires TPM 2.0 + Secure Boot on the VM. Bring your own Windows licensing.",
+    "build": "packer-windows"
   }
 ]
