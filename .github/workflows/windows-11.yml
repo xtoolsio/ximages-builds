@@ -72,6 +72,12 @@ jobs:
           PACKER_LOG: "1"
           PACKER_LOG_PATH: packer.log
         run: |
+          # Windows 11 install ISO — download once; both Packer (iso_url)
+          # and the bootindex=0 boot drive reference this same file.
+          curl -fsSL -o win11.iso "https://go.microsoft.com/fwlink/?linkid=2289031"
+          sz=$(stat -c%s win11.iso); [ "$sz" -gt 4000000000 ] || { echo "win11.iso too small ($sz bytes)"; exit 1; }
+          export PKR_VAR_iso_url="file://$PWD/win11.iso"
+          export PKR_VAR_boot_iso="$PWD/win11.iso"
           # virtio-win ISO for the viostor boot-driver injection (q35 has
           # no inbox disk bus). Verify it's a real ISO before building.
           curl -fsSL -o virtio-win.iso https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso

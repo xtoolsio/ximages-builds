@@ -45,6 +45,15 @@ variable "virtio_iso" {
   default = ""
 }
 
+# Absolute path to the Windows install ISO — attached on its own AHCI
+# controller with bootindex=0 so OVMF boots it. The Packer QEMU builder
+# in EFI mode gives the install ISO no boot priority, so OVMF otherwise
+# falls through to PXE/floppy and reports "no bootable device".
+variable "boot_iso" {
+  type    = string
+  default = ""
+}
+
 source "qemu" "win11" {
   iso_url      = var.iso_url
   iso_checksum = var.iso_checksum
@@ -103,6 +112,11 @@ source "qemu" "win11" {
     ["-global", "driver=cfi.pflash01,property=secure,value=on"],
     # virtio-win ISO so WinPE can load the viostor boot driver.
     ["-drive", "file=${var.virtio_iso},media=cdrom"],
+    # Install ISO on a dedicated AHCI controller with bootindex=0 so
+    # OVMF actually boots it (Packer's EFI mode sets no boot priority).
+    ["-device", "ahci,id=bootahci"],
+    ["-drive", "id=bootcd,if=none,media=cdrom,file=${var.boot_iso}"],
+    ["-device", "ide-cd,drive=bootcd,bus=bootahci.0,bootindex=0"],
   ]
 }
 
