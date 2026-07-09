@@ -54,7 +54,10 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils ovmf xorriso swtpm swtpm-tools gvncviewer
           echo "== OVMF secure-boot firmware =="; ls -l /usr/share/OVMF/OVMF_CODE_4M.secboot.fd /usr/share/OVMF/OVMF_VARS_4M.ms.fd
           command -v swtpm >/dev/null || { echo "swtpm missing"; exit 1; }
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp.gpg
+          # --batch --yes: overwrite the keyring non-interactively (on a
+          # persistent self-hosted runner the file survives between runs and
+          # plain --dearmor would try to prompt via /dev/tty and fail).
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/hashicorp.gpg
           echo "deb [signed-by=/usr/share/keyrings/hashicorp.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
           sudo apt-get update -q && sudo apt-get install -y packer
           packer version
