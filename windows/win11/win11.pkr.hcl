@@ -134,18 +134,22 @@ source "qemu" "win11" {
     ["-global", "driver=cfi.pflash01,property=secure,value=on"],
     # Target install disk (virtio-blk so the finished image is virtio-
     # native). Added by hand because the full qemuargs override drops the
-    # builder's managed disk. bootindex=1 so the install ISO (bootindex=0)
-    # boots first, then the installed OS. WinPE loads viostor via the
-    # autounattend windowsPE DriverPaths so this disk is visible in Setup.
+    # builder's managed disk. bootindex=0 (AHEAD of the install CD): empty
+    # at first boot so OVMF skips it and boots the CD installer, but once
+    # Windows writes its boot manager the disk boots first — otherwise the
+    # CD (if higher priority) reboots Setup forever instead of the OS.
+    # WinPE loads viostor via the autounattend windowsPE DriverPaths so
+    # this disk is visible in Setup.
     ["-drive", "id=maindisk,if=none,file=${var.output_disk},format=qcow2,cache=writeback,discard=unmap"],
-    ["-device", "virtio-blk-pci,drive=maindisk,bootindex=1"],
+    ["-device", "virtio-blk-pci,drive=maindisk,bootindex=0"],
     # virtio-win ISO so WinPE can load the viostor boot driver.
     ["-drive", "file=${var.virtio_iso},media=cdrom"],
-    # Install ISO on a dedicated AHCI controller with bootindex=0 so
-    # OVMF actually boots it (Packer's EFI mode sets no boot priority).
+    # Install ISO on a dedicated AHCI controller. bootindex=1 (BEHIND the
+    # disk): OVMF boots it only while the disk has no boot manager, i.e.
+    # the initial install boot; afterwards the installed OS wins.
     ["-device", "ahci,id=bootahci"],
     ["-drive", "id=bootcd,if=none,media=cdrom,file=${var.boot_iso}"],
-    ["-device", "ide-cd,drive=bootcd,bus=bootahci.0,bootindex=0"],
+    ["-device", "ide-cd,drive=bootcd,bus=bootahci.0,bootindex=1"],
     # TPM 2.0 FRONTEND. vtpm=true launches swtpm and adds the -tpmdev/
     # -chardev backend, but the qemuargs override drops the plugin's
     # `-device tpm-tis`, so the guest saw no TPM and Win11 Setup failed the
