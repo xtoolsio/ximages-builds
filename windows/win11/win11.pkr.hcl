@@ -38,6 +38,15 @@ variable "output_dir" {
   default = "output"
 }
 
+# Absolute path to the install disk Packer creates (output_dir/vm_name).
+# The full qemuargs override below suppresses the builder's own managed
+# disk drive, so the target disk must be attached by hand — otherwise
+# Windows Setup shows an empty "Select location" list (no disk at all).
+variable "output_disk" {
+  type    = string
+  default = "output/win11.qcow2"
+}
+
 # Absolute path to the virtio-win ISO, attached as an extra CD so
 # Windows Setup can load the virtio-blk (viostor) boot driver.
 variable "virtio_iso" {
@@ -123,6 +132,13 @@ source "qemu" "win11" {
     ["-drive", "if=pflash,unit=1,format=raw,file=${var.ovmf_vars}"],
     # Protect the Secure Boot variable store (pairs with smm=on).
     ["-global", "driver=cfi.pflash01,property=secure,value=on"],
+    # Target install disk (virtio-blk so the finished image is virtio-
+    # native). Added by hand because the full qemuargs override drops the
+    # builder's managed disk. bootindex=1 so the install ISO (bootindex=0)
+    # boots first, then the installed OS. WinPE loads viostor via the
+    # autounattend windowsPE DriverPaths so this disk is visible in Setup.
+    ["-drive", "id=maindisk,if=none,file=${var.output_disk},format=qcow2,cache=writeback,discard=unmap"],
+    ["-device", "virtio-blk-pci,drive=maindisk,bootindex=1"],
     # virtio-win ISO so WinPE can load the viostor boot driver.
     ["-drive", "file=${var.virtio_iso},media=cdrom"],
     # Install ISO on a dedicated AHCI controller with bootindex=0 so

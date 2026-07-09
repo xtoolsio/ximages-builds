@@ -127,6 +127,12 @@ jobs:
           cp -f /usr/share/OVMF/OVMF_VARS_4M.ms.fd "$CACHE/OVMF_VARS.fd"
           chmod u+w "$CACHE/OVMF_VARS.fd"
           export PKR_VAR_ovmf_vars="$CACHE/OVMF_VARS.fd"
+
+          # Absolute path to the install disk Packer creates under this
+          # working dir (output/<vm_name>); passed to the hand-rolled
+          # virtio-blk device in qemuargs. Absolute so it resolves no matter
+          # what cwd Packer launches QEMU from.
+          export PKR_VAR_output_disk="$PWD/output/win11.qcow2"
           packer init .
           # Screenshot the guest console (VNC :99) every 30s so we can SEE
           # what a hang is stuck on instead of flying blind. Shots upload
