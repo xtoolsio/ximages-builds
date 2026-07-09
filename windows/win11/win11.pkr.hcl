@@ -130,6 +130,11 @@ source "qemu" "win11" {
     ["-device", "ahci,id=bootahci"],
     ["-drive", "id=bootcd,if=none,media=cdrom,file=${var.boot_iso}"],
     ["-device", "ide-cd,drive=bootcd,bus=bootahci.0,bootindex=0"],
+    # TPM 2.0 FRONTEND. vtpm=true launches swtpm and adds the -tpmdev/
+    # -chardev backend, but the qemuargs override drops the plugin's
+    # `-device tpm-tis`, so the guest saw no TPM and Win11 Setup failed the
+    # requirements check. Attach it by hand to the plugin's tpm0 backend.
+    ["-device", "tpm-tis,tpmdev=tpm0"],
   ]
 }
 
