@@ -84,18 +84,24 @@ jobs:
           # install.wim; efisys_noprompt so it boots without a keypress).
           rm -rf isoroot win11-ua.iso
           mkdir isoroot
-          xorriso -osirrox on -indev win11.iso -extract / isoroot >/dev/null 2>&1
+          xorriso -osirrox on -indev win11.iso -extract / isoroot
           chmod -R u+w isoroot
           cp autounattend.xml isoroot/autounattend.xml
-          EFISYS=efi/microsoft/boot/efisys_noprompt.bin
-          [ -f "isoroot/$EFISYS" ] || EFISYS=efi/microsoft/boot/efisys.bin
+          echo "== boot images in ISO =="; ls -l isoroot/boot/etfsboot.com isoroot/efi/microsoft/boot/efisys*.bin 2>&1 || true
+          # UEFI boot image is required (24H2 media is typically UEFI-only);
+          # BIOS El Torito (etfsboot.com) is added only if present.
+          EFI=""
+          for f in efi/microsoft/boot/efisys_noprompt.bin efi/microsoft/boot/efisys.bin; do
+            [ -f "isoroot/$f" ] && { EFI="$f"; break; }
+          done
+          [ -n "$EFI" ] || { echo "no EFI boot image found in ISO"; exit 1; }
+          BIOSARGS=""
+          [ -f isoroot/boot/etfsboot.com ] && BIOSARGS="-b boot/etfsboot.com -no-emul-boot -boot-load-size 8 -boot-info-table -eltorito-alt-boot"
           xorriso -as mkisofs -o win11-ua.iso -iso-level 3 -allow-limited-size -r -J -joliet-long \
-            -V "WIN11UA" \
-            -b boot/etfsboot.com -no-emul-boot -boot-load-size 8 -boot-info-table \
-            -eltorito-alt-boot -e "$EFISYS" -no-emul-boot \
-            isoroot >/dev/null 2>&1
+            -V "WIN11UA" $BIOSARGS -e "$EFI" -no-emul-boot isoroot
           rm -rf isoroot
           [ -s win11-ua.iso ] || { echo "ISO repack failed"; exit 1; }
+          echo "repacked ISO: $(du -h win11-ua.iso | cut -f1)"
           export PKR_VAR_iso_url="file://$PWD/win11-ua.iso"
           export PKR_VAR_boot_iso="$PWD/win11-ua.iso"
 
