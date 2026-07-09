@@ -72,16 +72,37 @@ jobs:
           PACKER_LOG: "1"
           PACKER_LOG_PATH: packer.log
         run: |
-          # Windows 11 install ISO — download once; both Packer (iso_url)
-          # and the bootindex=0 boot drive reference this same file.
-          curl -fsSL -o win11.iso "https://go.microsoft.com/fwlink/?linkid=2289031"
-          sz=$(stat -c%s win11.iso); [ "$sz" -gt 4000000000 ] || { echo "win11.iso too small ($sz bytes)"; exit 1; }
-          export PKR_VAR_iso_url="file://$PWD/win11.iso"
-          export PKR_VAR_boot_iso="$PWD/win11.iso"
+          # Windows 11 install ISO. Cache on the (persistent) self-hosted
+          # runner so re-runs skip the ~5.5GB download.
+          [ -s win11.iso ] || curl -fsSL -o win11.iso "https://go.microsoft.com/fwlink/?linkid=2289031"
+          sz=$(stat -c%s win11.iso); [ "$sz" -gt 4000000000 ] || { echo "win11.iso too small ($sz bytes)"; rm -f win11.iso; exit 1; }
+
+          # Inject autounattend.xml into the ISO ROOT. Windows 11 24H2's
+          # redesigned Setup (SetupPrep.exe) no longer reads the answer file
+          # from a *separate* CD — it must be on the install media itself.
+          # Rebuild a UEFI-bootable ISO (allow-limited-size for the >4GB
+          # install.wim; efisys_noprompt so it boots without a keypress).
+          rm -rf isoroot win11-ua.iso
+          mkdir isoroot
+          xorriso -osirrox on -indev win11.iso -extract / isoroot >/dev/null 2>&1
+          chmod -R u+w isoroot
+          cp autounattend.xml isoroot/autounattend.xml
+          EFISYS=efi/microsoft/boot/efisys_noprompt.bin
+          [ -f "isoroot/$EFISYS" ] || EFISYS=efi/microsoft/boot/efisys.bin
+          xorriso -as mkisofs -o win11-ua.iso -iso-level 3 -allow-limited-size -r -J -joliet-long \
+            -V "WIN11UA" \
+            -b boot/etfsboot.com -no-emul-boot -boot-load-size 8 -boot-info-table \
+            -eltorito-alt-boot -e "$EFISYS" -no-emul-boot \
+            isoroot >/dev/null 2>&1
+          rm -rf isoroot
+          [ -s win11-ua.iso ] || { echo "ISO repack failed"; exit 1; }
+          export PKR_VAR_iso_url="file://$PWD/win11-ua.iso"
+          export PKR_VAR_boot_iso="$PWD/win11-ua.iso"
+
           # virtio-win ISO for the viostor boot-driver injection (q35 has
-          # no inbox disk bus). Verify it's a real ISO before building.
-          curl -fsSL -o virtio-win.iso https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
-          file virtio-win.iso | grep -qi 'ISO 9660' || { echo "virtio-win.iso is not an ISO"; exit 1; }
+          # no inbox disk bus). Cache it too.
+          [ -s virtio-win.iso ] || curl -fsSL -o virtio-win.iso https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+          file virtio-win.iso | grep -qi 'ISO 9660' || { echo "virtio-win.iso is not an ISO"; rm -f virtio-win.iso; exit 1; }
           export PKR_VAR_virtio_iso="$PWD/virtio-win.iso"
           packer init .
           # Screenshot the guest console (VNC :99) every 30s so we can SEE
