@@ -30,7 +30,11 @@ env:
 
 jobs:
   build:
-    runs-on: [self-hosted, linux, x64, kvm]
+    # GitHub-hosted for community transparency (cosign keyless OIDC, public
+    # build logs). GitHub's Linux runners expose /dev/kvm, so the QEMU/OVMF/
+    # vTPM build runs here just like on the self-hosted box used to iron out
+    # the bugs. The build is routed to /mnt (see below) for disk headroom.
+    runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
@@ -75,10 +79,13 @@ jobs:
           PACKER_LOG: "1"
           PACKER_LOG_PATH: packer.log
         run: |
-          # Cache big downloads OUTSIDE the repo checkout — actions/checkout
-          # cleans untracked files in the work dir on every run, so an ISO
-          # cached inside windows/win11 would be re-downloaded every time.
-          CACHE="$HOME/win11build"; mkdir -p "$CACHE"
+          # Build scratch on /mnt: GitHub-hosted runners have only ~14GB
+          # free on / but ~70GB on /mnt, and this build peaks ~40GB (install
+          # ISO + repack tree + raw qcow2 + compressed image). /mnt is root-
+          # owned on hosted runners, so claim it for the runner user. This
+          # also keeps the big files out of the repo checkout, which
+          # actions/checkout wipes each run.
+          CACHE="/mnt/win11build"; sudo mkdir -p "$CACHE"; sudo chown "$(id -u):$(id -g)" "$CACHE"
 
           # Windows 11 Enterprise install ISO (~5GB).
           [ -s "$CACHE/win11.iso" ] || curl -fsSL -o "$CACHE/win11.iso" "https://go.microsoft.com/fwlink/?linkid=2289031"
@@ -98,7 +105,7 @@ jobs:
           UA="$PWD/autounattend.xml"; [ -s "$UA" ] || { echo "autounattend.xml missing"; exit 1; }
           ISOROOT="$CACHE/isoroot"; OUT="$CACHE/win11-ua.iso"
           sudo umount /mnt/w11 2>/dev/null || true
-          sudo rm -rf "$ISOROOT" "$OUT"; mkdir -p "$ISOROOT" /mnt/w11
+          sudo rm -rf "$ISOROOT" "$OUT"; mkdir -p "$ISOROOT"; sudo mkdir -p /mnt/w11
           sudo mount -o loop,ro "$CACHE/win11.iso" /mnt/w11
           sudo cp -a /mnt/w11/. "$ISOROOT"/
           sudo umount /mnt/w11
@@ -128,11 +135,12 @@ jobs:
           chmod u+w "$CACHE/OVMF_VARS.fd"
           export PKR_VAR_ovmf_vars="$CACHE/OVMF_VARS.fd"
 
-          # Absolute path to the install disk Packer creates under this
-          # working dir (output/<vm_name>); passed to the hand-rolled
-          # virtio-blk device in qemuargs. Absolute so it resolves no matter
-          # what cwd Packer launches QEMU from.
-          export PKR_VAR_output_disk="$PWD/output/win11.qcow2"
+          # Packer output on /mnt too — the raw install qcow2 grows to
+          # ~20GB. Absolute paths so they resolve regardless of QEMU's cwd.
+          # Packer refuses a pre-existing output dir, so clear it first.
+          sudo rm -rf "$CACHE/output"
+          export PKR_VAR_output_dir="$CACHE/output"
+          export PKR_VAR_output_disk="$CACHE/output/win11.qcow2"
           packer init .
           # Screenshot the guest console (VNC :99) every 30s so we can SEE
           # what a hang is stuck on instead of flying blind. Shots upload
@@ -159,9 +167,14 @@ jobs:
 
       - name: Compress qcow2
         run: |
-          mkdir -p out
-          qemu-img convert -O qcow2 -c windows/win11/output/win11.qcow2 out/image.qcow2
-          rm -rf windows/win11/output
+          # Keep the ~8GB compressed image on /mnt as well; symlink `out` so
+          # every later `out/...` reference (sign, manifest, upload) lands on
+          # the big disk without changing those steps. Packer wrote the raw
+          # disk to /mnt/win11build/output (PKR_VAR_output_dir above).
+          sudo mkdir -p /mnt/win11build/out; sudo chown "$(id -u):$(id -g)" /mnt/win11build/out
+          ln -sfn /mnt/win11build/out out
+          qemu-img convert -O qcow2 -c /mnt/win11build/output/win11.qcow2 out/image.qcow2
+          rm -rf /mnt/win11build/output
           qemu-img info out/image.qcow2
           df -h /
 
