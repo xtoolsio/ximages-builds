@@ -72,44 +72,51 @@ jobs:
           PACKER_LOG: "1"
           PACKER_LOG_PATH: packer.log
         run: |
-          # Windows 11 install ISO. Cache on the (persistent) self-hosted
-          # runner so re-runs skip the ~5.5GB download.
-          [ -s win11.iso ] || curl -fsSL -o win11.iso "https://go.microsoft.com/fwlink/?linkid=2289031"
-          sz=$(stat -c%s win11.iso); [ "$sz" -gt 4000000000 ] || { echo "win11.iso too small ($sz bytes)"; rm -f win11.iso; exit 1; }
+          # Cache big downloads OUTSIDE the repo checkout — actions/checkout
+          # cleans untracked files in the work dir on every run, so an ISO
+          # cached inside windows/win11 would be re-downloaded every time.
+          CACHE="$HOME/win11build"; mkdir -p "$CACHE"
 
-          # Inject autounattend.xml into the ISO ROOT. Windows 11 24H2's
-          # redesigned Setup (SetupPrep.exe) no longer reads the answer file
-          # from a *separate* CD — it must be on the install media itself.
-          # Rebuild a UEFI-bootable ISO (allow-limited-size for the >4GB
-          # install.wim; efisys_noprompt so it boots without a keypress).
-          rm -rf isoroot win11-ua.iso
-          mkdir isoroot
-          xorriso -osirrox on -indev win11.iso -extract / isoroot
-          chmod -R u+w isoroot
-          cp autounattend.xml isoroot/autounattend.xml
-          echo "== boot images in ISO =="; ls -l isoroot/boot/etfsboot.com isoroot/efi/microsoft/boot/efisys*.bin 2>&1 || true
-          # UEFI boot image is required (24H2 media is typically UEFI-only);
-          # BIOS El Torito (etfsboot.com) is added only if present.
-          EFI=""
-          for f in efi/microsoft/boot/efisys_noprompt.bin efi/microsoft/boot/efisys.bin; do
-            [ -f "isoroot/$f" ] && { EFI="$f"; break; }
-          done
-          [ -n "$EFI" ] || { echo "no EFI boot image found in ISO"; exit 1; }
-          BIOSARGS=""
-          [ -f isoroot/boot/etfsboot.com ] && BIOSARGS="-b boot/etfsboot.com -no-emul-boot -boot-load-size 8 -boot-info-table -eltorito-alt-boot"
-          xorriso -as mkisofs -o win11-ua.iso -iso-level 3 -allow-limited-size -r -J -joliet-long \
-            -V "WIN11UA" $BIOSARGS -e "$EFI" -no-emul-boot isoroot
-          rm -rf isoroot
-          [ -s win11-ua.iso ] || { echo "ISO repack failed"; exit 1; }
-          echo "repacked ISO: $(du -h win11-ua.iso | cut -f1)"
-          export PKR_VAR_iso_url="file://$PWD/win11-ua.iso"
-          export PKR_VAR_boot_iso="$PWD/win11-ua.iso"
+          # Windows 11 Enterprise install ISO (~5GB).
+          [ -s "$CACHE/win11.iso" ] || curl -fsSL -o "$CACHE/win11.iso" "https://go.microsoft.com/fwlink/?linkid=2289031"
+          sz=$(stat -c%s "$CACHE/win11.iso"); [ "$sz" -gt 4000000000 ] || { echo "win11.iso too small ($sz bytes)"; rm -f "$CACHE/win11.iso"; exit 1; }
+
+          # Inject autounattend.xml into the install-media ROOT. Windows 11
+          # 24H2's redesigned Setup (SetupPrep.exe) no longer reads the answer
+          # file from a *separate* CD — it must be on the install media itself.
+          #
+          # Windows media stores its real payload in a UDF filesystem; xorriso
+          # can only read the tiny ISO9660 stub (README.TXT), so extract-and-
+          # rebuild via xorriso silently loses everything. Mount the UDF with
+          # the kernel driver, copy the full tree, add the answer file, then
+          # rebuild a BIOS+UEFI El Torito ISO. -iso-level 3 gives multi-extent
+          # support for the 4.3GB install.wim (>4GiB); do NOT use
+          # -allow-limited-size — that TRUNCATES large files.
+          UA="$PWD/autounattend.xml"; [ -s "$UA" ] || { echo "autounattend.xml missing"; exit 1; }
+          ISOROOT="$CACHE/isoroot"; OUT="$CACHE/win11-ua.iso"
+          sudo umount /mnt/w11 2>/dev/null || true
+          sudo rm -rf "$ISOROOT" "$OUT"; mkdir -p "$ISOROOT" /mnt/w11
+          sudo mount -o loop,ro "$CACHE/win11.iso" /mnt/w11
+          sudo cp -a /mnt/w11/. "$ISOROOT"/
+          sudo umount /mnt/w11
+          sudo cp "$UA" "$ISOROOT/autounattend.xml"
+          echo "== install.wim / boot images in rebuilt tree =="
+          ls -l "$ISOROOT/sources/install.wim" "$ISOROOT/boot/etfsboot.com" "$ISOROOT/efi/microsoft/boot/efisys_noprompt.bin"
+          xorriso -as mkisofs -o "$OUT" -iso-level 3 -r -J -joliet-long -V "WIN11UA" \
+            -b boot/etfsboot.com -no-emul-boot -boot-load-size 8 -boot-info-table \
+            -eltorito-alt-boot -e efi/microsoft/boot/efisys_noprompt.bin -no-emul-boot \
+            "$ISOROOT"
+          sudo rm -rf "$ISOROOT"
+          [ -s "$OUT" ] || { echo "ISO repack failed"; exit 1; }
+          echo "repacked ISO: $(du -h "$OUT" | cut -f1)"
+          export PKR_VAR_iso_url="file://$OUT"
+          export PKR_VAR_boot_iso="$OUT"
 
           # virtio-win ISO for the viostor boot-driver injection (q35 has
-          # no inbox disk bus). Cache it too.
-          [ -s virtio-win.iso ] || curl -fsSL -o virtio-win.iso https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
-          file virtio-win.iso | grep -qi 'ISO 9660' || { echo "virtio-win.iso is not an ISO"; rm -f virtio-win.iso; exit 1; }
-          export PKR_VAR_virtio_iso="$PWD/virtio-win.iso"
+          # no inbox disk bus). Cached outside the checkout too.
+          [ -s "$CACHE/virtio-win.iso" ] || curl -fsSL -o "$CACHE/virtio-win.iso" https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
+          file "$CACHE/virtio-win.iso" | grep -qi 'ISO 9660' || { echo "virtio-win.iso is not an ISO"; rm -f "$CACHE/virtio-win.iso"; exit 1; }
+          export PKR_VAR_virtio_iso="$CACHE/virtio-win.iso"
           packer init .
           # Screenshot the guest console (VNC :99) every 30s so we can SEE
           # what a hang is stuck on instead of flying blind. Shots upload
