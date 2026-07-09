@@ -54,6 +54,16 @@ variable "boot_iso" {
   default = ""
 }
 
+# Absolute path to a WRITABLE per-build copy of OVMF_VARS_4M.ms.fd
+# (Microsoft Secure Boot keys enrolled). Because qemuargs below fully
+# override the plugin's firmware handling, the OVMF pflash pair is passed
+# by hand and the vars store must be writable, so the workflow copies the
+# read-only distro vars file to this path before each build.
+variable "ovmf_vars" {
+  type    = string
+  default = ""
+}
+
 source "qemu" "win11" {
   iso_url      = var.iso_url
   iso_checksum = var.iso_checksum
@@ -82,11 +92,9 @@ source "qemu" "win11" {
   output_directory = var.output_dir
   vm_name          = "win11.qcow2"
 
-  # UEFI + Secure Boot: secboot code + Microsoft-key-enrolled vars. The
-  # plugin copies the vars to a writable per-VM file.
-  efi_boot          = true
-  efi_firmware_code = "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
-  efi_firmware_vars = "/usr/share/OVMF/OVMF_VARS_4M.ms.fd"
+  # UEFI + Secure Boot firmware is attached by hand in qemuargs below (the
+  # plugin's efi_boot is ignored once qemuargs overrides the command line,
+  # which silently left the VM on SeaBIOS). Do NOT set efi_boot here.
 
   # TPM 2.0 (plugin launches swtpm; requires swtpm on the runner).
   vtpm            = true
@@ -108,6 +116,11 @@ source "qemu" "win11" {
 
   qemuargs = [
     ["-cpu", "host"],
+    # UEFI + Secure Boot firmware (secboot CODE + MS-keys VARS). Passed by
+    # hand because qemuargs override the plugin's own EFI wiring; without
+    # this QEMU silently falls back to SeaBIOS and Win11 refuses to install.
+    ["-drive", "if=pflash,unit=0,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"],
+    ["-drive", "if=pflash,unit=1,format=raw,file=${var.ovmf_vars}"],
     # Protect the Secure Boot variable store (pairs with smm=on).
     ["-global", "driver=cfi.pflash01,property=secure,value=on"],
     # virtio-win ISO so WinPE can load the viostor boot driver.

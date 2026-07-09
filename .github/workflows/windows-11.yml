@@ -120,6 +120,13 @@ jobs:
           [ -s "$CACHE/virtio-win.iso" ] || curl -fsSL -o "$CACHE/virtio-win.iso" https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
           file "$CACHE/virtio-win.iso" | grep -qi 'ISO 9660' || { echo "virtio-win.iso is not an ISO"; rm -f "$CACHE/virtio-win.iso"; exit 1; }
           export PKR_VAR_virtio_iso="$CACHE/virtio-win.iso"
+
+          # Fresh WRITABLE copy of the OVMF Secure Boot variable store for
+          # this build (the distro file is read-only; Secure Boot state is
+          # written into it at boot). Passed to QEMU pflash unit 1.
+          cp -f /usr/share/OVMF/OVMF_VARS_4M.ms.fd "$CACHE/OVMF_VARS.fd"
+          chmod u+w "$CACHE/OVMF_VARS.fd"
+          export PKR_VAR_ovmf_vars="$CACHE/OVMF_VARS.fd"
           packer init .
           # Screenshot the guest console (VNC :99) every 30s so we can SEE
           # what a hang is stuck on instead of flying blind. Shots upload
