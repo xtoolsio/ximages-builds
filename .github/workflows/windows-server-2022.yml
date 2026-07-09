@@ -108,7 +108,7 @@ jobs:
             --arg sha256 "$SHA256" \
             --argjson size "$SIZE" \
             --arg identity "$IDENTITY" \
-            '{schema_version: 1, family_id: $fam.family_id, os: $fam.os,
+            '{schema_version: 1, family_id: $fam.family_id, os: $fam.os, os_label: $fam.os_label,
               os_version: $fam.os_version, arch: $fam.arch, hypervisor: $fam.hypervisor,
               name: $fam.name, description: $fam.description,
               version: $version, published_at: $published_at,

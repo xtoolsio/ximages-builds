@@ -149,6 +149,7 @@ jobs:
           jq -n \
             --arg family_id "${{ matrix.family_id }}" \
             --arg os "${{ matrix.os }}" \
+            --arg os_label "${{ matrix.os_label }}" \
             --arg os_version "${{ matrix.os_version }}" \
             --arg arch "${{ matrix.arch }}" \
             --arg hypervisor "${{ matrix.hypervisor }}" \
@@ -159,7 +160,7 @@ jobs:
             --arg sha256 "$SHA256" \
             --argjson size "$SIZE" \
             --arg identity "$IDENTITY" \
-            '{schema_version: 1, family_id: $family_id, os: $os, os_version: $os_version,
+            '{schema_version: 1, family_id: $family_id, os: $os, os_label: $os_label, os_version: $os_version,
               arch: $arch, hypervisor: $hypervisor, name: $name, description: $description,
               version: $version, published_at: $published_at,
               qcow2: {file: "image.qcow2", sha256: $sha256, size_bytes: $size},

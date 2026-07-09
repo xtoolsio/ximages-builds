@@ -38,6 +38,7 @@ jobs:
             fi
             jq -n --argjson fam "$fam" --argjson man "$manifest" \
               '{family_id: $fam.family_id, name: $fam.name, os: $fam.os,
+                os_label: $fam.os_label,
                 os_version: $fam.os_version, arch: $fam.arch, hypervisor: $fam.hypervisor,
                 description: $fam.description, latest_version: $man.version,
                 published_at: $man.published_at, size_bytes: $man.qcow2.size_bytes}' >> entries.jsonl

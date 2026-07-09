@@ -51,11 +51,13 @@ jobs:
             if ! curl -fsS "$ORIGIN/$path/$ver/manifest.json" -o manifest.json; then
               echo "::warning::$slug $ver manifest missing — skipped"; continue
             fi
-            # Refresh name + description from families.json (the catalog
-            # source of truth) so display copy edits don't need a rebuild;
-            # everything else in the manifest is preserved.
+            # Refresh name + os_label + description from families.json (the
+            # catalog source of truth) so display copy edits don't need a
+            # rebuild; everything else in the manifest is preserved.
             name=$(jq -r .name <<<"$fam"); desc=$(jq -r .description <<<"$fam")
-            jq --arg n "$name" --arg d "$desc" '.name=$n | .description=$d' manifest.json > manifest.new
+            oslabel=$(jq -r .os_label <<<"$fam")
+            jq --arg n "$name" --arg d "$desc" --arg ol "$oslabel" \
+              '.name=$n | .description=$d | .os_label=$ol' manifest.json > manifest.new
             mv manifest.new manifest.json
             echo "signing $slug $ver"
             cosign sign-blob --yes \
