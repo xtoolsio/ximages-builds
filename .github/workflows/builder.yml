@@ -58,10 +58,14 @@ jobs:
       - name: Install libguestfs
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y libguestfs-tools qemu-utils
+          sudo apt-get install -y libguestfs-tools qemu-utils passt
           # libguestfs on GitHub runners: the appliance kernel must be
           # world-readable and the direct backend avoids the missing libvirt.
           sudo chmod 0644 /boot/vmlinuz-* || true
+          # Ubuntu 24.04 sets kernel.apparmor_restrict_unprivileged_userns=1,
+          # which makes passt (the appliance's user-mode network) exit 1 —
+          # so --install/--run-command that need network fail. Relax it.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           echo "LIBGUESTFS_BACKEND=direct" >> "$GITHUB_ENV"
 
       - name: Download base cloud image + verify checksum
