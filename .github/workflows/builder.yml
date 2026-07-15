@@ -1,0 +1,187 @@
+# Build + publish the ximages-builder image (Track A2 of xImages M3.0.f).
+#
+# Unlike the customer-facing OS families (publish-official.yml, upstream
+# passthrough) and the Windows Packer builds, this is an INFRASTRUCTURE image:
+# the ephemeral VM ximagesd clones per custom build (xImages D-005/D-021). It is
+# the Ubuntu 24.04 cloud image customized with the tools a build needs —
+# Packer + the QEMU plugin, qemu-system/KVM for the nested build VM,
+# qemu-guest-agent (so xCompute reports the builder's IP) and cloud-init (so
+# ximagesd injects the per-build SSH key + DHCP config). It is NOT a catalog
+# family: it is bundled into the xCloud install (Track B2), not pulled at
+# runtime, so it is published under ximages/builder/... not ximages/official/...
+#
+# Build method is virt-customize (libguestfs): package installs into the cloud
+# image offline — no boot/SSH cycle — which is robust in CI and right for an
+# infra image that doesn't need the full ISO-based Packer provenance story.
+#
+# Signing + manifest + provenance mirror publish-official.yml exactly, so the
+# xCloud installer verifies the builder with the same cosign identity the trust
+# bundle already allowlists:
+#   ^https://github\.com/xtoolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$
+
+name: builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image version (YYYYMMDD); defaults to today"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write   # cosign keyless signing via GitHub OIDC
+  contents: read
+
+env:
+  SPACES_HOST: sfo3.digitaloceanspaces.com
+  BUCKET: xtools-data
+  FAMILY_PATH: ximages/builder/amd64/xcompute
+  # Base image — the same Ubuntu 24.04 cloud image the ubuntu-server-24.04
+  # family passes through, so the builder tracks the OS we build ON.
+  UPSTREAM_URL: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+  CHECKSUM_URL: https://cloud-images.ubuntu.com/noble/current/SHA256SUMS
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          [ -z "$VERSION" ] && VERSION="$(date -u +%Y%m%d)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install libguestfs
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y libguestfs-tools qemu-utils
+          # libguestfs on GitHub runners: the appliance kernel must be
+          # world-readable and the direct backend avoids the missing libvirt.
+          sudo chmod 0644 /boot/vmlinuz-* || true
+          echo "LIBGUESTFS_BACKEND=direct" >> "$GITHUB_ENV"
+
+      - name: Download base cloud image + verify checksum
+        run: |
+          FILE="$(basename "$UPSTREAM_URL")"
+          curl -fsSL -o "$FILE" "$UPSTREAM_URL"
+          curl -fsSL -o SHA256SUMS "$CHECKSUM_URL"
+          grep " [*]\?$FILE\$" SHA256SUMS | sha256sum -c -
+          mkdir -p out
+          # Give the builder headroom for Packer + the QEMU plugin.
+          qemu-img resize "$FILE" +3G
+          mv "$FILE" ximages-builder.qcow2
+
+      - name: Customize (install builder toolchain)
+        run: |
+          # HashiCorp apt key, staged for the in-appliance repo add.
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor > hashicorp.gpg
+
+          virt-customize -a ximages-builder.qcow2 \
+            --upload hashicorp.gpg:/usr/share/keyrings/hashicorp-archive-keyring.gpg \
+            --run-command 'echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com noble main" > /etc/apt/sources.list.d/hashicorp.list' \
+            --run-command 'apt-get update' \
+            --install qemu-system-x86,qemu-utils,ovmf,swtpm,qemu-guest-agent,cloud-init,curl,ca-certificates,unzip,packer \
+            --run-command 'mkdir -p /opt/packer/plugins' \
+            --run-command 'PACKER_PLUGIN_PATH=/opt/packer/plugins packer plugins install github.com/hashicorp/qemu' \
+            --run-command 'echo PACKER_PLUGIN_PATH=/opt/packer/plugins > /etc/environment.d/10-packer.conf || true' \
+            --write '/etc/profile.d/packer-plugins.sh:export PACKER_PLUGIN_PATH=/opt/packer/plugins' \
+            --run-command 'systemctl enable qemu-guest-agent' \
+            --run-command "printf 'ximages-builder\n version=${{ steps.ver.outputs.version }}\n built=%s\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\" > /etc/ximages-builder-release" \
+            --run-command 'cloud-init clean --logs || true' \
+            --run-command 'apt-get clean && rm -rf /var/lib/apt/lists/*' \
+            --run-command 'packer version && qemu-system-x86_64 --version | head -1'
+
+      - name: Compress the output qcow2
+        run: |
+          qemu-img convert -c -O qcow2 ximages-builder.qcow2 out/image.qcow2
+          file out/image.qcow2 | grep -qi qcow || { echo "not a qcow2"; exit 1; }
+          ls -lh out/image.qcow2
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign (cosign keyless + Rekor offline bundle)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature out/signature.sig \
+            --bundle out/rekor-bundle.json \
+            out/image.qcow2
+
+      - name: Write manifest.json + provenance.json + latest.json
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          SHA256="$(sha256sum out/image.qcow2 | cut -d' ' -f1)"
+          SIZE="$(stat -c%s out/image.qcow2)"
+          IDENTITY="https://github.com/${{ github.repository }}/.github/workflows/builder.yml@${{ github.ref }}"
+
+          jq -n \
+            --arg family_id "xtools/ximages-builder/amd64/xcompute" \
+            --arg os "ubuntu-server" --arg os_label "xImages Builder" --arg os_version "24.04" \
+            --arg arch "amd64" --arg hypervisor "xcompute" \
+            --arg name "xImages Builder" \
+            --arg description "Ephemeral build VM template: Ubuntu 24.04 + Packer + QEMU/KVM + qemu-guest-agent, cloned by ximagesd per custom image build." \
+            --arg version "$VERSION" --arg published_at "$NOW" \
+            --arg sha256 "$SHA256" --argjson size "$SIZE" --arg identity "$IDENTITY" \
+            '{schema_version: 1, kind: "builder", family_id: $family_id, os: $os, os_label: $os_label,
+              os_version: $os_version, arch: $arch, hypervisor: $hypervisor, name: $name, description: $description,
+              version: $version, published_at: $published_at,
+              qcow2: {file: "image.qcow2", sha256: $sha256, size_bytes: $size},
+              signing_identity: $identity}' > out/manifest.json
+
+          jq -n \
+            --arg sha256 "$SHA256" --arg upstream "$UPSTREAM_URL" --arg checksums "$CHECKSUM_URL" \
+            --arg repo_uri "git+https://github.com/${{ github.repository }}@${{ github.ref }}" \
+            --arg commit "${{ github.sha }}" --arg identity "$IDENTITY" \
+            --arg run "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg started "$NOW" \
+            '{"_type": "https://in-toto.io/Statement/v1",
+              subject: [{name: "image.qcow2", digest: {sha256: $sha256}}],
+              predicateType: "https://slsa.dev/provenance/v1",
+              predicate: {
+                buildDefinition: {
+                  buildType: "https://github.com/xtoolsio/ximages-builds/virt-customize/v1",
+                  externalParameters: {base_image: $upstream, baseImageChecksumSource: $checksums},
+                  resolvedDependencies: [{uri: $repo_uri, digest: {gitCommit: $commit}}]},
+                runDetails: {builder: {id: $identity},
+                  metadata: {invocationId: $run, startedOn: $started}}}}' > out/provenance.json
+
+          jq -n --arg version "$VERSION" --arg published_at "$NOW" \
+            '{version: $version, published_at: $published_at}' > out/latest.json
+          cat out/manifest.json
+
+      - name: Sign the manifest (what the installer verifies)
+        run: |
+          cosign sign-blob --yes \
+            --output-signature out/manifest.sig \
+            --bundle out/manifest-bundle.json \
+            out/manifest.json
+
+      - name: Verify locally what the installer will verify
+        run: |
+          cosign verify-blob \
+            --bundle out/manifest-bundle.json \
+            --certificate-identity-regexp '^https://github\.com/xtoolsio/ximages-builds/\.github/workflows/.+@refs/(heads/main|tags/.+)$' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            out/manifest.json
+
+      - name: Install s3cmd
+        run: sudo apt-get install -y s3cmd
+
+      - name: Upload to download.xtools.com (DO Spaces)
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          put() { s3cmd put --acl-public "$@" \
+            --host="$SPACES_HOST" \
+            --host-bucket="%(bucket)s.$SPACES_HOST" \
+            --access_key=${{ secrets.SPACES_ACCESS_KEY }} \
+            --secret_key=${{ secrets.SPACES_SECRET_KEY }}; }
+          for f in manifest.json manifest.sig manifest-bundle.json image.qcow2 signature.sig provenance.json rekor-bundle.json; do
+            put "out/$f" "s3://$BUCKET/$FAMILY_PATH/$VERSION/$f"
+          done
+          put --add-header="Cache-Control: max-age=60" out/latest.json "s3://$BUCKET/$FAMILY_PATH/latest.json"
+          echo "published builder $VERSION to $FAMILY_PATH"
