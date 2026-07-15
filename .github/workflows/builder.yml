@@ -91,9 +91,13 @@ jobs:
           sudo mount /dev/nbd0p1 /mnt/builder
           test -f /mnt/builder/etc/os-release || { echo "root partition not on nbd0p1"; exit 1; }
 
-          # Bind the host kernel interfaces + DNS so apt/network work in chroot.
+          # Bind the host kernel interfaces so apt/network work in chroot.
           for d in dev dev/pts proc sys run; do sudo mount --bind "/$d" "/mnt/builder/$d"; done
-          sudo cp /etc/resolv.conf /mnt/builder/etc/resolv.conf
+          # The image's /etc/resolv.conf is a symlink into /run; replace it with
+          # a static resolver for the install (the chroot shares the host net
+          # namespace, so public DNS is reachable), restored to the symlink after.
+          sudo rm -f /mnt/builder/etc/resolv.conf
+          printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /mnt/builder/etc/resolv.conf >/dev/null
           # Stop services from starting during package install in the chroot.
           printf '#!/bin/sh\nexit 101\n' | sudo tee /mnt/builder/usr/sbin/policy-rc.d >/dev/null
           sudo chmod +x /mnt/builder/usr/sbin/policy-rc.d
@@ -119,7 +123,9 @@ jobs:
           PROV
           sudo chroot /mnt/builder /bin/bash /tmp/provision.sh
 
-          # Teardown (always), then let the qcow2 settle.
+          # Restore the distro's resolved symlink so the booted builder manages
+          # DNS the Ubuntu way, and clean up the install artifacts.
+          sudo ln -sf ../run/systemd/resolve/stub-resolv.conf /mnt/builder/etc/resolv.conf
           sudo rm -f /mnt/builder/usr/sbin/policy-rc.d /mnt/builder/tmp/provision.sh
           for d in run sys proc dev/pts dev; do sudo umount "/mnt/builder/$d"; done
           sudo umount /mnt/builder
