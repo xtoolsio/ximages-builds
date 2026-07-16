@@ -110,7 +110,14 @@ jobs:
           curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com noble main" > /etc/apt/sources.list.d/hashicorp.list
           apt-get update
-          apt-get install -y qemu-system-x86 qemu-utils ovmf swtpm qemu-guest-agent cloud-init packer
+          # xorriso builds the NoCloud cidata seed ISO Packer attaches to the
+          # nested build VM (source.qemu cd_files); without it Packer errors
+          # "could not find a supported CD ISO creation command".
+          apt-get install -y qemu-system-x86 qemu-utils ovmf swtpm qemu-guest-agent cloud-init packer xorriso
+          # The cloud-init build user (ubuntu) runs the nested Packer/QEMU build
+          # and must be able to open /dev/kvm (root:kvm 0660), else qemu fails to
+          # start with "Could not access KVM kernel module: Permission denied".
+          usermod -aG kvm ubuntu
           mkdir -p /opt/packer/plugins
           PACKER_PLUGIN_PATH=/opt/packer/plugins packer plugins install github.com/hashicorp/qemu
           echo 'export PACKER_PLUGIN_PATH=/opt/packer/plugins' > /etc/profile.d/packer-plugins.sh
