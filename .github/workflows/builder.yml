@@ -114,10 +114,13 @@ jobs:
           # nested build VM (source.qemu cd_files); without it Packer errors
           # "could not find a supported CD ISO creation command".
           apt-get install -y qemu-system-x86 qemu-utils ovmf swtpm qemu-guest-agent cloud-init packer xorriso
-          # The cloud-init build user (ubuntu) runs the nested Packer/QEMU build
-          # and must be able to open /dev/kvm (root:kvm 0660), else qemu fails to
-          # start with "Could not access KVM kernel module: Permission denied".
-          usermod -aG kvm ubuntu
+          # The nested Packer/QEMU build runs as the cloud-init build user, which
+          # only exists after first boot — so it can't be added to the kvm group
+          # at image-build time. A udev rule opening /dev/kvm to 0666 lets any
+          # user run KVM on this single-purpose, ephemeral builder (destroyed
+          # after each build), avoiding the group-membership dependency. Without
+          # it qemu fails: "Could not access KVM kernel module: Permission denied".
+          printf 'KERNEL=="kvm", GROUP="kvm", MODE="0666"\n' > /etc/udev/rules.d/65-kvm.rules
           mkdir -p /opt/packer/plugins
           PACKER_PLUGIN_PATH=/opt/packer/plugins packer plugins install github.com/hashicorp/qemu
           echo 'export PACKER_PLUGIN_PATH=/opt/packer/plugins' > /etc/profile.d/packer-plugins.sh
